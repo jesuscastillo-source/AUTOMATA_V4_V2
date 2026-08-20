@@ -872,17 +872,28 @@ with tab1:
                     st.warning("No se encontraron filas válidas (revisa que exista la columna NOMBRE COMPLETO).")
                 else:
                     archivos = {}
+                    errores_filas = []
                     molde_bytes = molde_c.getvalue()
                     for idx, row_data in enumerate(excel_data):
-                        doc = Document(io.BytesIO(molde_bytes))
-                        replace_mergefield_con_formato(doc, row_data)
-                        numero = str(idx + 1).zfill(3)
-                        nombre = str(row_data["NOMBRE COMPLETO"][0]).replace(" ", "_")
-                        archivos[f"{numero}_CTO_{nombre}.docx"] = guardar_docx_bytes(doc)
+                        try:
+                            doc = Document(io.BytesIO(molde_bytes))
+                            replace_mergefield_con_formato(doc, row_data)
+                            numero = str(idx + 1).zfill(3)
+                            nombre = str(row_data["NOMBRE COMPLETO"][0]).replace(" ", "_")
+                            archivos[f"{numero}_CTO_{nombre}.docx"] = guardar_docx_bytes(doc)
+                        except Exception as e:
+                            nombre_fallback = row_data.get("NOMBRE COMPLETO", (f"fila {idx + 1}",))[0]
+                            errores_filas.append(f"Fila {idx + 1} ({nombre_fallback}): {e}")
 
-                    zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(archivos)} contrato(s) generado(s).")
-                    st.download_button("⬇️ Descargar ZIP", zip_bytes, "Contratos_Generados.zip", "application/zip")
+                    if archivos:
+                        zip_bytes = crear_zip(archivos)
+                        st.success(f"{len(archivos)} de {len(excel_data)} contrato(s) generado(s).")
+                        st.download_button("⬇️ Descargar ZIP", zip_bytes, "Contratos_Generados.zip", "application/zip")
+                    if errores_filas:
+                        st.error(
+                            "❌ Estas filas no se pudieron procesar (dato inválido) — corrígelas y "
+                            "vuelve a intentar:\n\n" + "\n".join(f"- {e}" for e in errores_filas)
+                        )
             except Exception as e:
                 st.error(f"Error generando los contratos: {e}")
 
@@ -947,103 +958,119 @@ with tab2:
                     archivos = {}
                     resumen = []
                     causales_no_reconocidas = []
+                    errores_filas = []
                     df_salida = df.copy()
-                    montos_finales = []
+                    montos_dict = {}
 
                     for index, row in df.iterrows():
-                        nombre = row["NOMBRE COMPLETO"]
-                        rut = row["CARNÉ DE IDENTIDAD N°"]
-                        fecha_actual = pd.to_datetime(row["FECHA ACTUAL"]).date()
-                        fecha_inicio = pd.to_datetime(row["INICIO CONTRARO"]).date()
-                        fecha_fin = pd.to_datetime(row["FIN CONTRAT"]).date()
-                        sueldo_base = row["SUELDO BASE"]
-                        causal = row["CAUSAL TÉRMINO"]
+                        nombre_fallback = row.get("NOMBRE COMPLETO", f"(fila {index + 1})")
+                        try:
+                            nombre = row["NOMBRE COMPLETO"]
+                            rut = row["CARNÉ DE IDENTIDAD N°"]
+                            fecha_actual = pd.to_datetime(row["FECHA ACTUAL"]).date()
+                            fecha_inicio = pd.to_datetime(row["INICIO CONTRARO"]).date()
+                            fecha_fin = pd.to_datetime(row["FIN CONTRAT"]).date()
+                            sueldo_base = row["SUELDO BASE"]
+                            causal = row["CAUSAL TÉRMINO"]
 
-                        dias_obtenidos, years, months, days = calcular_dias_obtenidos(
-                            fecha_inicio, fecha_fin, base["es_zona_extrema"]
-                        )
-                        dias_pendientes = dias_obtenidos - base["dias_tomados"]
-                        dias_inhabiles, _calendario = calcular_dias_inhabiles(fecha_fin, dias_pendientes)
+                            dias_obtenidos, years, months, days = calcular_dias_obtenidos(
+                                fecha_inicio, fecha_fin, base["es_zona_extrema"]
+                            )
+                            dias_pendientes = dias_obtenidos - base["dias_tomados"]
+                            dias_inhabiles, _calendario = calcular_dias_inhabiles(fecha_fin, dias_pendientes)
 
-                        resultado = calcular_finiquito_l41(
-                            causal=causal,
-                            es_zona_extrema=base["es_zona_extrema"],
-                            fecha_inicio=fecha_inicio,
-                            fecha_fin=fecha_fin,
-                            dias_inhabiles=dias_inhabiles,
-                            fecha_aviso=base["fecha_aviso"],
-                            dias_tomados=base["dias_tomados"],
-                            remuneracion_pendiente=base["remuneracion_pendiente"],
-                            sueldo_minimo=base["sueldo_minimo"],
-                            valor_uf=base["valor_uf"],
-                            tipo_sueldo=base["tipo_sueldo"],
-                            sueldo_base_fijo=sueldo_base,
-                            gratificacion_fijo=base["gratificacion_fijo"],
-                            colacion_fijo=base["colacion_fijo"],
-                            movilizacion_fijo=base["movilizacion_fijo"],
-                        )
-                        monto = resultado["MONTO_FINIQUITO"]
+                            resultado = calcular_finiquito_l41(
+                                causal=causal,
+                                es_zona_extrema=base["es_zona_extrema"],
+                                fecha_inicio=fecha_inicio,
+                                fecha_fin=fecha_fin,
+                                dias_inhabiles=dias_inhabiles,
+                                fecha_aviso=base["fecha_aviso"],
+                                dias_tomados=base["dias_tomados"],
+                                remuneracion_pendiente=base["remuneracion_pendiente"],
+                                sueldo_minimo=base["sueldo_minimo"],
+                                valor_uf=base["valor_uf"],
+                                tipo_sueldo=base["tipo_sueldo"],
+                                sueldo_base_fijo=sueldo_base,
+                                gratificacion_fijo=base["gratificacion_fijo"],
+                                colacion_fijo=base["colacion_fijo"],
+                                movilizacion_fijo=base["movilizacion_fijo"],
+                            )
+                            monto = resultado["MONTO_FINIQUITO"]
 
-                        if not resultado["CAUSAL_RECONOCIDA"]:
-                            causales_no_reconocidas.append(f"Fila {index + 1} ({nombre}): «{causal}»")
+                            if not resultado["CAUSAL_RECONOCIDA"]:
+                                causales_no_reconocidas.append(f"Fila {index + 1} ({nombre}): «{causal}»")
 
-                        resumen.append({
-                            "Nombre": nombre,
-                            "Días trabajados": (fecha_fin - fecha_inicio).days + 1,
-                            "Días feriado pendiente": round(dias_pendientes, 2),
-                            "Días inhábiles": dias_inhabiles,
-                            "Monto Finiquito": monto,
-                            "< 30 días (finiquito $0)": "Sí" if resultado["MENOS_DE_30_DIAS"] else "No",
-                            "Causal reconocida (solo texto D14)": "Sí" if resultado["CAUSAL_RECONOCIDA"] else "⚠️ No",
-                        })
-                        montos_finales.append(monto)
+                            resumen.append({
+                                "Nombre": nombre,
+                                "Días trabajados": (fecha_fin - fecha_inicio).days + 1,
+                                "Días feriado pendiente": round(dias_pendientes, 2),
+                                "Días inhábiles": dias_inhabiles,
+                                "Monto Finiquito": monto,
+                                "< 30 días (finiquito $0)": "Sí" if resultado["MENOS_DE_30_DIAS"] else "No",
+                                "Causal reconocida (solo texto D14)": "Sí" if resultado["CAUSAL_RECONOCIDA"] else "⚠️ No",
+                            })
+                            montos_dict[index] = monto
 
-                        # 1) Planilla de cálculo (Excel)
-                        wb = load_workbook(io.BytesIO(plantilla_bytes))
-                        wb.calculation.fullCalcOnLoad = True
-                        ws = wb.active
-                        ws["D6"] = nombre
-                        ws["D7"] = rut
-                        ws["D8"] = "PEE"
-                        ws["D14"] = causal_texto_canonico(causal)
-                        ws["D17"] = fecha_inicio
-                        ws["D17"].number_format = "DD-MM-YYYY"
-                        ws["D18"] = fecha_fin
-                        ws["D18"].number_format = "DD-MM-YYYY"
-                        ws["L20"] = dias_inhabiles
-                        ws["D39"] = sueldo_base
+                            # 1) Planilla de cálculo (Excel)
+                            wb = load_workbook(io.BytesIO(plantilla_bytes))
+                            wb.calculation.fullCalcOnLoad = True
+                            ws = wb.active
+                            ws["D6"] = nombre
+                            ws["D7"] = rut
+                            ws["D8"] = "PEE"
+                            ws["D14"] = causal_texto_canonico(causal)
+                            ws["D17"] = fecha_inicio
+                            ws["D17"].number_format = "DD-MM-YYYY"
+                            ws["D18"] = fecha_fin
+                            ws["D18"].number_format = "DD-MM-YYYY"
+                            ws["L20"] = dias_inhabiles
+                            ws["D39"] = sueldo_base
 
-                        numero = str(index + 1).zfill(2)
-                        nombre_archivo = str(nombre).replace(" ", "_")
-                        archivos[f"Calculo/{numero}_CALCULO_FINIQUITO_{nombre_archivo}.xlsx"] = guardar_xlsx_bytes(wb)
+                            numero = str(index + 1).zfill(2)
+                            nombre_archivo = str(nombre).replace(" ", "_")
+                            archivos[f"Calculo/{numero}_CALCULO_FINIQUITO_{nombre_archivo}.xlsx"] = guardar_xlsx_bytes(wb)
 
-                        # 2) Finiquito + Declaración Jurada (Word) — usa el monto recién calculado
-                        monto_texto = monto_a_texto(monto, prefijo="$")
-                        row_data_word = {
-                            "NOMBRE COMPLETO": (nombre, False, None),
-                            "CARNÉ DE IDENTIDAD N°": (rut, False, None),
-                            "FECHA ACTUAL": (format_fecha(fecha_actual), False, None),
-                            "INICIO CONTRATO": (format_fecha(fecha_inicio), False, None),
-                            "INICIO CONTRARO": (format_fecha(fecha_inicio), False, None),
-                            "FIN CONTRAT": (format_fecha(fecha_fin), False, None),
-                            "FIN CONTRATO": (format_fecha(fecha_fin), False, None),
-                            "MONTO FINIQUITO": (monto_texto, False, None),
-                        }
+                            # 2) Finiquito + Declaración Jurada (Word) — usa el monto recién calculado
+                            monto_texto = monto_a_texto(monto, prefijo="$")
+                            row_data_word = {
+                                "NOMBRE COMPLETO": (nombre, False, None),
+                                "CARNÉ DE IDENTIDAD N°": (rut, False, None),
+                                "FECHA ACTUAL": (format_fecha(fecha_actual), False, None),
+                                "INICIO CONTRATO": (format_fecha(fecha_inicio), False, None),
+                                "INICIO CONTRARO": (format_fecha(fecha_inicio), False, None),
+                                "FIN CONTRAT": (format_fecha(fecha_fin), False, None),
+                                "FIN CONTRATO": (format_fecha(fecha_fin), False, None),
+                                "MONTO FINIQUITO": (monto_texto, False, None),
+                            }
 
-                        doc_f = Document(io.BytesIO(finiquito_bytes))
-                        replace_mergefield_con_formato(doc_f, row_data_word)
-                        archivos[f"Finiquitos/{numero}_Finiquito_{nombre_archivo}.docx"] = guardar_docx_bytes(doc_f)
+                            doc_f = Document(io.BytesIO(finiquito_bytes))
+                            replace_mergefield_con_formato(doc_f, row_data_word)
+                            archivos[f"Finiquitos/{numero}_Finiquito_{nombre_archivo}.docx"] = guardar_docx_bytes(doc_f)
 
-                        doc_j = Document(io.BytesIO(jurada_bytes))
-                        replace_mergefield_con_formato(doc_j, row_data_word)
-                        archivos[f"Declaraciones_Juradas/{numero}_Decl_Jurada_{nombre_archivo}.docx"] = guardar_docx_bytes(doc_j)
+                            doc_j = Document(io.BytesIO(jurada_bytes))
+                            replace_mergefield_con_formato(doc_j, row_data_word)
+                            archivos[f"Declaraciones_Juradas/{numero}_Decl_Jurada_{nombre_archivo}.docx"] = guardar_docx_bytes(doc_j)
 
-                    df_salida["MONTO FINIQUITO"] = montos_finales
+                        except Exception as e:
+                            errores_filas.append(f"Fila {index + 1} ({nombre_fallback}): {e}")
+                            continue
+
+                    df_salida["MONTO FINIQUITO"] = df_salida.index.map(montos_dict)
                     buf_salida = io.BytesIO()
                     df_salida.to_excel(buf_salida, index=False)
 
                     zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(df)} caso(s): planilla + finiquito + declaración jurada generados.")
+
+                    if montos_dict:
+                        st.success(f"{len(montos_dict)} de {len(df)} caso(s): planilla + finiquito + declaración jurada generados.")
+
+                    if errores_filas:
+                        st.error(
+                            "❌ Estas filas NO se pudieron procesar (dato inválido, ej. una fecha que no "
+                            "existe) — corrígelas en tu Excel y vuelve a correr solo esas. El resto de "
+                            "abajo sí se generó bien:\n\n" + "\n".join(f"- {e}" for e in errores_filas)
+                        )
 
                     if causales_no_reconocidas:
                         st.info(
@@ -1061,19 +1088,20 @@ with tab2:
                         "en el cálculo automático."
                     )
 
-                    st.dataframe(pd.DataFrame(resumen), use_container_width=True)
+                    if resumen:
+                        st.dataframe(pd.DataFrame(resumen), use_container_width=True)
 
-                    col_zip, col_datos = st.columns(2)
-                    col_zip.download_button(
-                        "⬇️ Descargar ZIP (planillas + finiquitos + declaraciones)", zip_bytes,
-                        "Finiquitos_Completo.zip", "application/zip",
-                    )
-                    col_datos.download_button(
-                        "⬇️ Descargar Excel con MONTO FINIQUITO relleno", buf_salida.getvalue(),
-                        "Datos_Finiquito_Con_Montos.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        help="Por si necesitas los montos aparte para otro uso.",
-                    )
+                        col_zip, col_datos = st.columns(2)
+                        col_zip.download_button(
+                            "⬇️ Descargar ZIP (planillas + finiquitos + declaraciones)", zip_bytes,
+                            "Finiquitos_Completo.zip", "application/zip",
+                        )
+                        col_datos.download_button(
+                            "⬇️ Descargar Excel con MONTO FINIQUITO relleno", buf_salida.getvalue(),
+                            "Datos_Finiquito_Con_Montos.xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            help="Por si necesitas los montos aparte para otro uso.",
+                        )
             except Exception as e:
                 st.error(f"Error generando finiquitos: {e}")
 
@@ -1106,16 +1134,26 @@ with tab3:
                     st.warning("No se encontraron filas válidas.")
                 else:
                     archivos = {}
+                    errores_filas = []
                     molde_bytes = molde_a.getvalue()
                     for idx, row_data in enumerate(excel_data, start=1):
-                        doc = Document(io.BytesIO(molde_bytes))
-                        replace_mergefields_simple(doc, row_data)
-                        nombre = row_data["NOMBRE COMPLETO"].replace(" ", "_")
-                        archivos[f"{idx:02d}_{nombre}_ANEXO.docx"] = guardar_docx_bytes(doc)
+                        try:
+                            doc = Document(io.BytesIO(molde_bytes))
+                            replace_mergefields_simple(doc, row_data)
+                            nombre = row_data["NOMBRE COMPLETO"].replace(" ", "_")
+                            archivos[f"{idx:02d}_{nombre}_ANEXO.docx"] = guardar_docx_bytes(doc)
+                        except Exception as e:
+                            errores_filas.append(f"Fila {idx} ({row_data.get('NOMBRE COMPLETO', '?')}): {e}")
 
-                    zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(archivos)} anexo(s) generado(s).")
-                    st.download_button("⬇️ Descargar ZIP", zip_bytes, "Anexos_Contrato.zip", "application/zip")
+                    if archivos:
+                        zip_bytes = crear_zip(archivos)
+                        st.success(f"{len(archivos)} de {len(excel_data)} anexo(s) generado(s).")
+                        st.download_button("⬇️ Descargar ZIP", zip_bytes, "Anexos_Contrato.zip", "application/zip")
+                    if errores_filas:
+                        st.error(
+                            "❌ Estas filas no se pudieron procesar — corrígelas y vuelve a intentar:\n\n"
+                            + "\n".join(f"- {e}" for e in errores_filas)
+                        )
             except Exception as e:
                 st.error(f"Error generando los anexos: {e}")
 
@@ -1149,16 +1187,26 @@ with tab4:
                     st.warning("No se encontraron filas válidas.")
                 else:
                     archivos = {}
+                    errores_filas = []
                     molde_bytes = molde_o.getvalue()
                     for i, row_data in enumerate(excel_data, start=1):
-                        doc = Document(io.BytesIO(molde_bytes))
-                        replace_mergefields_simple(doc, row_data, bold_keys={"SUELDO CAPATAZ LETRAS"})
-                        nombre = row_data["NOMBRE COMPLETO"].replace(" ", "_")
-                        archivos[f"{i:03d}_MOD_CONTRATO_{nombre}.docx"] = guardar_docx_bytes(doc)
+                        try:
+                            doc = Document(io.BytesIO(molde_bytes))
+                            replace_mergefields_simple(doc, row_data, bold_keys={"SUELDO CAPATAZ LETRAS"})
+                            nombre = row_data["NOMBRE COMPLETO"].replace(" ", "_")
+                            archivos[f"{i:03d}_MOD_CONTRATO_{nombre}.docx"] = guardar_docx_bytes(doc)
+                        except Exception as e:
+                            errores_filas.append(f"Fila {i} ({row_data.get('NOMBRE COMPLETO', '?')}): {e}")
 
-                    zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(archivos)} documento(s) generado(s).")
-                    st.download_button("⬇️ Descargar ZIP", zip_bytes, "Modificacion_Contrato_OB_CPT.zip", "application/zip")
+                    if archivos:
+                        zip_bytes = crear_zip(archivos)
+                        st.success(f"{len(archivos)} de {len(excel_data)} documento(s) generado(s).")
+                        st.download_button("⬇️ Descargar ZIP", zip_bytes, "Modificacion_Contrato_OB_CPT.zip", "application/zip")
+                    if errores_filas:
+                        st.error(
+                            "❌ Estas filas no se pudieron procesar — corrígelas y vuelve a intentar:\n\n"
+                            + "\n".join(f"- {e}" for e in errores_filas)
+                        )
             except Exception as e:
                 st.error(f"Error generando las modificaciones: {e}")
 
@@ -1226,22 +1274,32 @@ with tab5:
                     st.warning("No se encontraron filas con datos en ese Excel.")
                 else:
                     archivos = {}
+                    errores_filas = []
                     molde_bytes = molde_u.getvalue()
                     id_col_upper = id_col.strip().upper() if id_col else None
 
                     for idx, row_data in enumerate(data, start=1):
-                        doc = Document(io.BytesIO(molde_bytes))
-                        replace_mergefield_con_formato(doc, row_data)
+                        try:
+                            doc = Document(io.BytesIO(molde_bytes))
+                            replace_mergefield_con_formato(doc, row_data)
 
-                        if id_col_upper and id_col_upper in row_data:
-                            nombre_doc = limpiar_nombre_archivo(row_data[id_col_upper][0])
-                        else:
-                            nombre_doc = f"documento_{idx}"
+                            if id_col_upper and id_col_upper in row_data:
+                                nombre_doc = limpiar_nombre_archivo(row_data[id_col_upper][0])
+                            else:
+                                nombre_doc = f"documento_{idx}"
 
-                        archivos[f"{idx:03d}_{nombre_doc}.docx"] = guardar_docx_bytes(doc)
+                            archivos[f"{idx:03d}_{nombre_doc}.docx"] = guardar_docx_bytes(doc)
+                        except Exception as e:
+                            errores_filas.append(f"Fila {idx}: {e}")
 
-                    zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(archivos)} documento(s) generado(s).")
-                    st.download_button("⬇️ Descargar ZIP", zip_bytes, "Documentos_Generados.zip", "application/zip")
+                    if archivos:
+                        zip_bytes = crear_zip(archivos)
+                        st.success(f"{len(archivos)} de {len(data)} documento(s) generado(s).")
+                        st.download_button("⬇️ Descargar ZIP", zip_bytes, "Documentos_Generados.zip", "application/zip")
+                    if errores_filas:
+                        st.error(
+                            "❌ Estas filas no se pudieron procesar — corrígelas y vuelve a intentar:\n\n"
+                            + "\n".join(f"- {e}" for e in errores_filas)
+                        )
             except Exception as e:
                 st.error(f"Error generando los documentos: {e}")

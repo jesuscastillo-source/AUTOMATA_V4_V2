@@ -44,6 +44,26 @@ Antes de confiar en esto para pagos reales: corre 5-10 casos reales tuyos
 contra lo que da tu Excel abierto en Excel de verdad. Si todo calza, recién
 ahí considera reemplazar tu app en producción.
 
+## Cambios de esta ronda (fusión + ajuste de cálculo)
+
+- **El monto ahora se calcula SIEMPRE como renuncia voluntaria** (vacaciones
+  proporcionales + días inhábiles + remuneración pendiente). Ya NO incluye
+  indemnización por aviso previo, años de servicio ni obra/faena, sin importar
+  la causal — eso lo agregas tú aparte, a mano, cuando corresponda. Esto fue
+  a pedido explícito: antes, para causales de despido (Art. 161-1, 161-2,
+  159-5), el cálculo sí las incluía y podía dar un monto varias veces más
+  alto que solo las vacaciones proporcionales.
+- **Se fusionaron "Cálculo Finiquitos" y "Finiquito + Decl. Jurada" en una
+  sola pestaña** ("Cálculo + Finiquito + Jurada"): subes el Excel de datos +
+  las 3 plantillas (cálculo Excel, finiquito Word, declaración jurada Word),
+  un clic, y se genera todo junto — ya no hace falta descargar el Excel con
+  el monto y volver a subirlo a mano.
+- Se corrigió que el texto de la causal que se escribe en la celda `D14` de
+  la planilla de cálculo ahora es el texto EXACTO del desplegable de Excel
+  (ej. "Art. 161-1: Necesidades de la empresa"), no el texto libre de tu
+  columna de datos — así, si alguna vez abres y recalculas la planilla en
+  Excel de verdad, no hay sorpresas de números que no calzan.
+
 ---
 
 App web (Streamlit) con 5 herramientas:

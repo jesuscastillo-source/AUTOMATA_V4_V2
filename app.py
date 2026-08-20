@@ -470,6 +470,29 @@ CAUSALES_VALIDAS = {
     "161-1", "161-2",
 }
 
+# Texto EXACTO tal cual lo espera la plantilla real (Hoja2!B4:B18) — las fórmulas
+# de Excel comparan texto exacto, así que si escribimos cualquier otra variante
+# en D14, la planilla (si alguien la abre en Excel) deja de reconocer la causal
+# y calcula un monto distinto al de Python. Escribiendo siempre este texto
+# canónico, Python y Excel quedan garantizados de coincidir.
+CAUSALES_TEXTO_CANONICO = {
+    "159-1": "Art. 159-1: Mutuo acuerdo",
+    "159-2": "Art. 159-2: Renuncia del trabajador",
+    "159-3": "Art. 159-3: Muerte del trabajador",
+    "159-4": "Art. 159-4: Vencimiento plazo convenido (contratos plazo fijo)",
+    "159-5": "Art. 159-5: Conclusión del trabajo que dio origen al contrato (obra o faena)",
+    "159-6": "Art. 159-6: Caso fortuito o fuerza mayor",
+    "160-1": "Art. 160-1: Falta probidad, vías de hecho, injurias o conducta grave",
+    "160-2": "Art. 160-2: Negociaciones del trabajador dentro del giro del negocio",
+    "160-3": "Art. 160-3: No concurrencia a labores sin causa justificada",
+    "160-4": "Art. 160-4: Abandono del trabajo por parte del trabajador",
+    "160-5": "Art. 160-5: Actos que afectan a la seguridad",
+    "160-6": "Art. 160-6: Perjuicio material causado intencionalmente",
+    "160-7": "Art. 160-7: Incumplimiento grave de las obligaciones",
+    "161-1": "Art. 161-1: Necesidades de la empresa",
+    "161-2": "Art. 161-2: Desahucio",
+}
+
 
 def normalizar_causal(texto):
     """Extrae el código de artículo (ej: '161-1', '159-5') de cualquier formato
@@ -482,6 +505,16 @@ def normalizar_causal(texto):
         codigo = f"{m.group(1)}-{m.group(2)}"
         return codigo if codigo in CAUSALES_VALIDAS else None
     return None
+
+
+def causal_texto_canonico(texto):
+    """Devuelve el texto EXACTO del desplegable de Excel para esta causal, o el
+    texto original si no se logró reconocer ningún código (para no perder la
+    información aunque no podamos usarla en el cálculo)."""
+    codigo = normalizar_causal(texto)
+    if codigo:
+        return CAUSALES_TEXTO_CANONICO[codigo]
+    return str(texto) if texto else ""
 
 
 def _a_fecha(valor):
@@ -602,44 +635,34 @@ def calcular_finiquito_l41(causal, es_zona_extrema, fecha_inicio, fecha_fin, dia
 
     l30 = remuneracion_pendiente
 
+    # DECISIÓN DEL USUARIO: no calcular aquí las indemnizaciones por despido
+    # (aviso previo, años de servicio, obra/faena). Todo se calcula SIEMPRE
+    # como si fuera renuncia voluntaria — solo vacaciones proporcionales +
+    # días inhábiles + remuneración pendiente. Los pagos extra por despido
+    # (Art. 161-1, 161-2, 159-5) se agregan aparte, a mano.
     l32 = 0
-    if causal_norm == "161-1":
-        if fecha_aviso is None:
-            l32 = total_haberes
-        else:
-            dias_aviso = (fecha_fin - fecha_aviso).days
-            if 0 <= dias_aviso <= 29:
-                l32 = total_haberes
-
     l34 = 0
-    if causal_norm in ("161-1", "161-2") and d26 > 0:
-        l34 = total_haberes * d26
 
     base_diaria = (sueldo_base_fijo if tipo_sueldo == "Fijo" else sueldo_base_var + prom_comisiones) / 30.0
     l36 = base_diaria * total_dias_feriado
 
     l38 = 0
-    if causal_norm == "159-5":
-        p38 = 1 if days >= 15 else 0
-        q38 = (years * 12) + months + p38
-        if fecha_fin >= datetime.date(2022, 1, 1):
-            m38 = 2.5
-        elif fecha_fin >= datetime.date(2021, 7, 1):
-            m38 = 2.0
-        elif fecha_fin >= datetime.date(2020, 7, 1):
-            m38 = 1.5
-        elif fecha_fin >= datetime.date(2019, 1, 1):
-            m38 = 1.0
-        else:
-            m38 = 0
-        l38 = (total_haberes / 30.0) * (q38 * m38)
 
     l40 = l30 + l32 + l34 + l36 + l38
-    l41 = int(Decimal(str(l40)).quantize(Decimal("1E1"), rounding=ROUND_HALF_UP))
+
+    # REGLA DE NEGOCIO: si trabajó menos de 30 días, el finiquito es $0,
+    # sin importar lo que dé la fórmula. El subtotal queda igual en el
+    # resultado (SUBTOTAL) solo como referencia de lo que habría dado.
+    menos_de_30_dias = dias_trabajados_totales < 30
+    if menos_de_30_dias:
+        l41 = 0
+    else:
+        l41 = int(Decimal(str(l40)).quantize(Decimal("1E1"), rounding=ROUND_HALF_UP))
 
     return {
         "MONTO_FINIQUITO": l41,
         "SUBTOTAL": l40,
+        "MENOS_DE_30_DIAS": menos_de_30_dias,
         "CAUSAL_RECONOCIDA": causal_norm is not None,
         "DIAS_OBTENIDOS": dias_obtenidos,
         "DIAS_PENDIENTES": dias_pendientes,
@@ -810,10 +833,9 @@ with st.sidebar:
         st.session_state.chat_ayuda.append(("assistant", respuesta_ayuda))
         st.rerun()
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📑 Contratos",
-    "🧮 Cálculo Finiquitos",
-    "📋 Finiquito + Decl. Jurada",
+    "🧮 Cálculo + Finiquito + Jurada",
     "➕ Anexo Continuidad",
     "⬆️ Anexo Obrero→Capataz",
     "🧩 Generador Universal",
@@ -866,46 +888,60 @@ with tab1:
 
 
 # ---------------------------------------------------------
-# TAB 2: CÁLCULO DE FINIQUITOS (planillas)
+# TAB 2: CÁLCULO + FINIQUITO + DECL. JURADA (todo en un clic)
 # ---------------------------------------------------------
 with tab2:
-    st.subheader("Cálculo de Finiquitos (planilla Excel)")
+    st.subheader("Cálculo de Finiquito + Finiquito + Declaración Jurada")
     with st.expander("Columnas esperadas en el Excel de datos"):
         st.markdown(
-            "- `NOMBRE COMPLETO`\n"
-            "- `CARNÉ DE IDENTIDAD N°`\n"
+            "- `NOMBRE COMPLETO`, `CARNÉ DE IDENTIDAD N°`\n"
+            "- `FECHA ACTUAL` (fecha del documento)\n"
             "- `INICIO CONTRARO`, `FIN CONTRAT` (fechas)\n"
             "- `SUELDO BASE`\n"
             "- `CAUSAL TÉRMINO`\n\n"
-            "La plantilla Excel debe tener las celdas: `D6` nombre, `D7` RUT, `D8` PEE, "
-            "`D14` causal, `D17` inicio, `D18` fin, `L20` días inhábiles, `D39` sueldo base. "
-            "El monto del finiquito se calcula reproduciendo las fórmulas reales de la "
-            "plantilla (incluye vacaciones proporcionales, días inhábiles, e indemnizaciones "
-            "cuando la causal es despido). Sueldo mínimo, valor UF, tipo de sueldo, "
-            "gratificación, zona extrema, etc. se leen directo de tu plantilla — si necesitas "
-            "cambiarlos, edítalos en el Excel que subes aquí."
+            "**El monto se calcula siempre como renuncia voluntaria**: vacaciones "
+            "proporcionales + días inhábiles + remuneración pendiente (si tu plantilla la "
+            "trae). No incluye indemnización por aviso previo, años de servicio ni obra/faena "
+            "— esos pagos por despido se agregan aparte, a mano. **Si trabajó menos de 30 "
+            "días, el finiquito da $0** (regla de negocio, sin excepción). Sueldo mínimo, "
+            "valor UF, gratificación, zona extrema, etc. se leen directo de tu plantilla de "
+            "cálculo.\n\n"
+            "Sube el Excel de datos + las 3 plantillas, y en un clic se calcula el monto Y se "
+            "generan los 3 documentos (planilla de cálculo, finiquito y declaración jurada) — "
+            "ya no hace falta descargar el monto y volver a subirlo a mano."
         )
 
     c1, c2 = st.columns(2)
-    excel_f = c1.file_uploader("Excel de datos", type=["xlsx"], key="f_excel")
-    plantilla_f = c2.file_uploader("Plantilla Excel (cálculo finiquito)", type=["xlsx"], key="f_plantilla")
-    bloque_auditoria_ia(excel_f, "Datos para calcular finiquitos (fechas de contrato, sueldo, causal)", "finiquitos")
+    excel_ft = c1.file_uploader("Excel de datos", type=["xlsx"], key="ft_excel")
+    plantilla_ft = c2.file_uploader("Plantilla Excel (cálculo finiquito)", type=["xlsx"], key="ft_plantilla")
+    c3, c4 = st.columns(2)
+    molde_finiquito_ft = c3.file_uploader("Plantilla Finiquito (Word)", type=["docx"], key="ft_finiquito")
+    molde_jurada_ft = c4.file_uploader("Plantilla Declaración Jurada (Word)", type=["docx"], key="ft_jurada")
+    bloque_auditoria_ia(excel_ft, "Datos para calcular y generar finiquitos", "finiquito_todo")
 
-    if st.button("Calcular y generar planillas", key="btn_f"):
-        if not excel_f or not plantilla_f:
-            st.error("Sube el Excel de datos y la plantilla primero.")
+    if st.button("Calcular y generar todo", key="btn_ft"):
+        faltan = [
+            n for n, v in [
+                ("Excel de datos", excel_ft), ("Plantilla Excel de cálculo", plantilla_ft),
+                ("Plantilla Finiquito", molde_finiquito_ft), ("Plantilla Declaración Jurada", molde_jurada_ft),
+            ] if not v
+        ]
+        if faltan:
+            st.error("Falta subir: " + ", ".join(faltan))
         else:
             try:
-                df = pd.read_excel(io.BytesIO(excel_f.getvalue()))
+                df = pd.read_excel(io.BytesIO(excel_ft.getvalue()))
                 df.columns = df.columns.str.strip().str.upper()
 
-                requeridas = ["NOMBRE COMPLETO", "CARNÉ DE IDENTIDAD N°", "INICIO CONTRARO",
-                              "FIN CONTRAT", "SUELDO BASE", "CAUSAL TÉRMINO"]
+                requeridas = ["NOMBRE COMPLETO", "CARNÉ DE IDENTIDAD N°", "FECHA ACTUAL",
+                              "INICIO CONTRARO", "FIN CONTRAT", "SUELDO BASE", "CAUSAL TÉRMINO"]
                 faltantes = [c for c in requeridas if c not in df.columns]
                 if faltantes:
                     st.error(f"Faltan columnas en el Excel: {', '.join(faltantes)}")
                 else:
-                    plantilla_bytes = plantilla_f.getvalue()
+                    plantilla_bytes = plantilla_ft.getvalue()
+                    finiquito_bytes = molde_finiquito_ft.getvalue()
+                    jurada_bytes = molde_jurada_ft.getvalue()
                     base = leer_valores_base_planilla(plantilla_bytes)
 
                     archivos = {}
@@ -917,6 +953,7 @@ with tab2:
                     for index, row in df.iterrows():
                         nombre = row["NOMBRE COMPLETO"]
                         rut = row["CARNÉ DE IDENTIDAD N°"]
+                        fecha_actual = pd.to_datetime(row["FECHA ACTUAL"]).date()
                         fecha_inicio = pd.to_datetime(row["INICIO CONTRARO"]).date()
                         fecha_fin = pd.to_datetime(row["FIN CONTRAT"]).date()
                         sueldo_base = row["SUELDO BASE"]
@@ -945,6 +982,7 @@ with tab2:
                             colacion_fijo=base["colacion_fijo"],
                             movilizacion_fijo=base["movilizacion_fijo"],
                         )
+                        monto = resultado["MONTO_FINIQUITO"]
 
                         if not resultado["CAUSAL_RECONOCIDA"]:
                             causales_no_reconocidas.append(f"Fila {index + 1} ({nombre}): «{causal}»")
@@ -954,18 +992,20 @@ with tab2:
                             "Días trabajados": (fecha_fin - fecha_inicio).days + 1,
                             "Días feriado pendiente": round(dias_pendientes, 2),
                             "Días inhábiles": dias_inhabiles,
-                            "Monto Finiquito": resultado["MONTO_FINIQUITO"],
-                            "Causal reconocida": "Sí" if resultado["CAUSAL_RECONOCIDA"] else "⚠️ No",
+                            "Monto Finiquito": monto,
+                            "< 30 días (finiquito $0)": "Sí" if resultado["MENOS_DE_30_DIAS"] else "No",
+                            "Causal reconocida (solo texto D14)": "Sí" if resultado["CAUSAL_RECONOCIDA"] else "⚠️ No",
                         })
-                        montos_finales.append(resultado["MONTO_FINIQUITO"])
+                        montos_finales.append(monto)
 
+                        # 1) Planilla de cálculo (Excel)
                         wb = load_workbook(io.BytesIO(plantilla_bytes))
                         wb.calculation.fullCalcOnLoad = True
                         ws = wb.active
                         ws["D6"] = nombre
                         ws["D7"] = rut
                         ws["D8"] = "PEE"
-                        ws["D14"] = causal
+                        ws["D14"] = causal_texto_canonico(causal)
                         ws["D17"] = fecha_inicio
                         ws["D17"].number_format = "DD-MM-YYYY"
                         ws["D18"] = fecha_fin
@@ -974,114 +1014,74 @@ with tab2:
                         ws["D39"] = sueldo_base
 
                         numero = str(index + 1).zfill(2)
-                        nombre_archivo = f"{numero}_CALCULO_FINIQUITO_{str(nombre).replace(' ', '_')}.xlsx"
-                        archivos[nombre_archivo] = guardar_xlsx_bytes(wb)
+                        nombre_archivo = str(nombre).replace(" ", "_")
+                        archivos[f"Calculo/{numero}_CALCULO_FINIQUITO_{nombre_archivo}.xlsx"] = guardar_xlsx_bytes(wb)
+
+                        # 2) Finiquito + Declaración Jurada (Word) — usa el monto recién calculado
+                        monto_texto = monto_a_texto(monto, prefijo="$")
+                        row_data_word = {
+                            "NOMBRE COMPLETO": (nombre, False, None),
+                            "CARNÉ DE IDENTIDAD N°": (rut, False, None),
+                            "FECHA ACTUAL": (format_fecha(fecha_actual), False, None),
+                            "INICIO CONTRATO": (format_fecha(fecha_inicio), False, None),
+                            "INICIO CONTRARO": (format_fecha(fecha_inicio), False, None),
+                            "FIN CONTRAT": (format_fecha(fecha_fin), False, None),
+                            "FIN CONTRATO": (format_fecha(fecha_fin), False, None),
+                            "MONTO FINIQUITO": (monto_texto, False, None),
+                        }
+
+                        doc_f = Document(io.BytesIO(finiquito_bytes))
+                        replace_mergefield_con_formato(doc_f, row_data_word)
+                        archivos[f"Finiquitos/{numero}_Finiquito_{nombre_archivo}.docx"] = guardar_docx_bytes(doc_f)
+
+                        doc_j = Document(io.BytesIO(jurada_bytes))
+                        replace_mergefield_con_formato(doc_j, row_data_word)
+                        archivos[f"Declaraciones_Juradas/{numero}_Decl_Jurada_{nombre_archivo}.docx"] = guardar_docx_bytes(doc_j)
 
                     df_salida["MONTO FINIQUITO"] = montos_finales
                     buf_salida = io.BytesIO()
                     df_salida.to_excel(buf_salida, index=False)
 
                     zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(archivos)} planilla(s) generada(s) y {len(montos_finales)} monto(s) calculado(s).")
+                    st.success(f"{len(df)} caso(s): planilla + finiquito + declaración jurada generados.")
 
                     if causales_no_reconocidas:
-                        st.warning(
-                            "⚠️ No reconocí la causal en estas filas — el monto para ellas puede estar "
-                            "incompleto si correspondía indemnización por despido (revísalas a mano antes "
-                            "de confiar en el número):\n\n" + "\n".join(f"- {c}" for c in causales_no_reconocidas)
+                        st.info(
+                            "ℹ️ No reconocí el formato de causal en estas filas — no afecta el monto "
+                            "(siempre se calcula como renuncia voluntaria), pero en la planilla de "
+                            "cálculo la celda D14 va a mostrar tu texto original tal cual:\n\n"
+                            + "\n".join(f"- {c}" for c in causales_no_reconocidas)
                         )
 
                     st.caption(
-                        "⚠️ Este monto es una reproducción en Python de las fórmulas de tu planilla Excel, "
-                        "verificada contra un caso real. Aun así, para los primeros usos te recomendamos "
-                        "abrir alguna planilla generada en Excel y comparar el número a ojo antes de confiar "
-                        "100% en el cálculo automático."
+                        "⚠️ Monto = vacaciones proporcionales + días inhábiles + remuneración pendiente "
+                        "(renuncia voluntaria siempre, $0 si trabajó menos de 30 días). No incluye "
+                        "indemnización por despido. Verificado contra un caso real, pero para los primeros "
+                        "usos te recomendamos comparar alguna planilla contra Excel antes de confiar 100% "
+                        "en el cálculo automático."
                     )
 
                     st.dataframe(pd.DataFrame(resumen), use_container_width=True)
 
                     col_zip, col_datos = st.columns(2)
                     col_zip.download_button(
-                        "⬇️ Descargar ZIP de planillas", zip_bytes,
-                        "CALCULO_FINIQU_GENERADOS.zip", "application/zip",
+                        "⬇️ Descargar ZIP (planillas + finiquitos + declaraciones)", zip_bytes,
+                        "Finiquitos_Completo.zip", "application/zip",
                     )
                     col_datos.download_button(
                         "⬇️ Descargar Excel con MONTO FINIQUITO relleno", buf_salida.getvalue(),
                         "Datos_Finiquito_Con_Montos.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        help="Listo para usar directo en la pestaña 'Finiquito + Decl. Jurada'.",
+                        help="Por si necesitas los montos aparte para otro uso.",
                     )
             except Exception as e:
-                st.error(f"Error calculando los finiquitos: {e}")
+                st.error(f"Error generando finiquitos: {e}")
 
 
 # ---------------------------------------------------------
-# TAB 3: FINIQUITO + DECLARACIÓN JURADA
+# TAB 3: ANEXO CONTINUIDAD
 # ---------------------------------------------------------
 with tab3:
-    st.subheader("Finiquito + Declaración Jurada")
-    with st.expander("Columnas esperadas en el Excel"):
-        st.markdown(
-            "- `NOMBRE COMPLETO`, `CARNÉ DE IDENTIDAD N°`\n"
-            "- `FECHA ACTUAL`, `INICIO CONTRATO` / `INICIO CONTRARO`, `FIN CONTRAT` / `FIN CONTRATO` (fechas)\n"
-            "- `MONTO FINIQUITO` (número)"
-        )
-
-    c1, c2, c3 = st.columns(3)
-    excel_j = c1.file_uploader("Excel de datos", type=["xlsx"], key="j_excel")
-    molde_finiquito = c2.file_uploader("Plantilla Finiquito (Word)", type=["docx"], key="j_finiquito")
-    molde_jurada = c3.file_uploader("Plantilla Declaración Jurada (Word)", type=["docx"], key="j_jurada")
-    bloque_auditoria_ia(excel_j, "Datos para finiquitos y declaraciones juradas", "jurada")
-
-    if st.button("Generar finiquitos + declaraciones", key="btn_j"):
-        if not excel_j or not molde_finiquito or not molde_jurada:
-            st.error("Sube el Excel y las dos plantillas primero.")
-        else:
-            try:
-                date_headers = ["FECHA ACTUAL", "INICIO CONTRATO", "INICIO CONTRARO", "FIN CONTRAT", "FIN CONTRATO"]
-                excel_data = leer_excel_formato(
-                    excel_j.getvalue(), date_headers,
-                    money_headers=["MONTO FINIQUITO"], money_prefijo="$"
-                )
-
-                if not excel_data:
-                    st.warning("No se encontraron filas válidas.")
-                else:
-                    archivos = {}
-                    finiquito_bytes = molde_finiquito.getvalue()
-                    jurada_bytes = molde_jurada.getvalue()
-                    contador = 1
-
-                    for row_data in excel_data:
-                        doc = Document(io.BytesIO(finiquito_bytes))
-                        replace_mergefield_con_formato(doc, row_data)
-                        nombre_trabajador = str(row_data["NOMBRE COMPLETO"][0]).replace(" ", "_")
-                        archivos[f"Finiquitos/{contador:03d}_Finiquito_{nombre_trabajador}.docx"] = guardar_docx_bytes(doc)
-                        contador += 1
-
-                    contador = 1
-                    for row_data in excel_data:
-                        jurada_data = {
-                            "NOMBRE COMPLETO": row_data["NOMBRE COMPLETO"],
-                            "CARNÉ DE IDENTIDAD N°": row_data.get("CARNÉ DE IDENTIDAD N°", ("", False, None)),
-                        }
-                        doc = Document(io.BytesIO(jurada_bytes))
-                        replace_mergefield_con_formato(doc, jurada_data)
-                        nombre_trabajador = str(row_data["NOMBRE COMPLETO"][0]).replace(" ", "_")
-                        archivos[f"Declaraciones_Juradas/{contador:03d}_Decl_Jurada_{nombre_trabajador}.docx"] = guardar_docx_bytes(doc)
-                        contador += 1
-
-                    zip_bytes = crear_zip(archivos)
-                    st.success(f"{len(excel_data)} finiquito(s) + declaración(es) generados.")
-                    st.download_button("⬇️ Descargar ZIP", zip_bytes, "Finiquitos_Generados.zip", "application/zip")
-            except Exception as e:
-                st.error(f"Error generando finiquitos/declaraciones: {e}")
-
-
-# ---------------------------------------------------------
-# TAB 4: ANEXO CONTINUIDAD
-# ---------------------------------------------------------
-with tab4:
     st.subheader("Anexo de Continuidad")
     with st.expander("Columnas esperadas en el Excel"):
         st.markdown(
@@ -1121,9 +1121,9 @@ with tab4:
 
 
 # ---------------------------------------------------------
-# TAB 5: ANEXO OBRERO -> CAPATAZ
+# TAB 4: ANEXO OBRERO -> CAPATAZ
 # ---------------------------------------------------------
-with tab5:
+with tab4:
     st.subheader("Anexo Obrero → Capataz")
     with st.expander("Columnas esperadas en el Excel"):
         st.markdown(
@@ -1164,9 +1164,9 @@ with tab5:
 
 
 # ---------------------------------------------------------
-# TAB 6: GENERADOR UNIVERSAL (columnas 100% dinámicas)
+# TAB 5: GENERADOR UNIVERSAL (columnas 100% dinámicas)
 # ---------------------------------------------------------
-with tab6:
+with tab5:
     st.subheader("Generador Universal")
     st.caption(
         "Para cualquier documento que no encaje en las pestañas anteriores: sube tu Excel y tu "

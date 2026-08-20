@@ -953,6 +953,17 @@ with tab2:
                     plantilla_bytes = plantilla_ft.getvalue()
                     finiquito_bytes = molde_finiquito_ft.getvalue()
                     jurada_bytes = molde_jurada_ft.getvalue()
+
+                    # Cargamos también con openpyxl (no solo pandas) para poder leer el
+                    # negrita/tamaño real de cada celda, igual que hacía el script original,
+                    # y pasar CUALQUIER columna del Excel al Word (no solo las que usamos
+                    # para calcular el monto).
+                    wb_datos = load_workbook(io.BytesIO(excel_ft.getvalue()), data_only=True)
+                    ws_datos = wb_datos.active
+                    headers_originales = {
+                        str(c.value).strip().upper(): i + 1
+                        for i, c in enumerate(ws_datos[1]) if c.value is not None
+                    }
                     base = leer_valores_base_planilla(plantilla_bytes)
 
                     archivos = {}
@@ -1032,17 +1043,31 @@ with tab2:
                             archivos[f"Calculo/{numero}_CALCULO_FINIQUITO_{nombre_archivo}.xlsx"] = guardar_xlsx_bytes(wb)
 
                             # 2) Finiquito + Declaración Jurada (Word) — usa el monto recién calculado
+                            # Partimos de TODAS las columnas de esta fila, con su negrita/tamaño
+                            # real (igual que el script original), y encima pisamos solo los
+                            # campos que nosotros calculamos o reformateamos.
+                            fila_excel_num = index + 2  # fila 1 = encabezados
+                            row_data_word = {}
+                            for header, col_num in headers_originales.items():
+                                celda = ws_datos.cell(row=fila_excel_num, column=col_num)
+                                bold = celda.font.bold if celda.font.bold is not None else False
+                                size = celda.font.sz if celda.font.sz is not None else None
+                                row_data_word[header] = (celda.value, bold, size)
+
+                            def _con_formato_previo(campo, valor_nuevo, bold_default=False):
+                                _, bold_prev, size_prev = row_data_word.get(campo, (None, bold_default, None))
+                                return (valor_nuevo, bold_prev, size_prev)
+
                             monto_texto = monto_a_texto(monto, prefijo="$")
-                            row_data_word = {
-                                "NOMBRE COMPLETO": (nombre, False, None),
-                                "CARNÉ DE IDENTIDAD N°": (rut, False, None),
-                                "FECHA ACTUAL": (format_fecha(fecha_actual), False, None),
-                                "INICIO CONTRATO": (format_fecha(fecha_inicio), False, None),
-                                "INICIO CONTRARO": (format_fecha(fecha_inicio), False, None),
-                                "FIN CONTRAT": (format_fecha(fecha_fin), False, None),
-                                "FIN CONTRATO": (format_fecha(fecha_fin), False, None),
-                                "MONTO FINIQUITO": (monto_texto, False, None),
-                            }
+                            row_data_word["FECHA ACTUAL"] = _con_formato_previo("FECHA ACTUAL", format_fecha(fecha_actual))
+                            row_data_word["INICIO CONTRATO"] = _con_formato_previo("INICIO CONTRATO", format_fecha(fecha_inicio))
+                            row_data_word["INICIO CONTRARO"] = _con_formato_previo("INICIO CONTRARO", format_fecha(fecha_inicio))
+                            row_data_word["FIN CONTRAT"] = _con_formato_previo("FIN CONTRAT", format_fecha(fecha_fin))
+                            row_data_word["FIN CONTRATO"] = _con_formato_previo("FIN CONTRATO", format_fecha(fecha_fin))
+                            row_data_word["CAUSAL TÉRMINO"] = _con_formato_previo("CAUSAL TÉRMINO", causal_texto_canonico(causal))
+                            # El monto es un valor calculado, no viene de una celda propia —
+                            # lo dejamos en negrita por defecto ya que es el dato clave del documento.
+                            row_data_word["MONTO FINIQUITO"] = (monto_texto, True, None)
 
                             doc_f = Document(io.BytesIO(finiquito_bytes))
                             replace_mergefield_con_formato(doc_f, row_data_word)
